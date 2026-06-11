@@ -25,4 +25,6 @@ export const KEYBOARD_SHORTCUTS = {
 };
 
 export const SOCKET_URL =
-  import.meta.env.MODE === 'production' ? '' : 'http://localhost:3001';
+  import.meta.env.MODE === 'production'
+    ? ''
+    : `http://${window.location.hostname}:3001`;
