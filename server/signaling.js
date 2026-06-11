@@ -66,6 +66,13 @@ export function setupSignaling(io, roomManager) {
       });
     });
 
+    // Client is ready with their audio stream (WebRTC handshake trigger)
+    socket.on('client-ready', ({ roomCode }) => {
+      socket.to(roomCode).emit('peer-ready', {
+        socketId: socket.id,
+      });
+    });
+
     // WebRTC signaling: offer
     socket.on('offer', ({ to, offer }) => {
       socket.to(to).emit('offer', {

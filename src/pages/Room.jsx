@@ -58,6 +58,9 @@ export default function Room({ socket, socketRef, connected }) {
           const processed = processStream(stream);
           processedStreamRef.current = processed || stream;
           setLocalStream(processedStreamRef.current);
+          
+          // Notify server that our local stream is ready
+          socket?.emit('client-ready', { roomCode: code });
         }
       });
     }
@@ -83,8 +86,7 @@ export default function Room({ socket, socketRef, connected }) {
         if (prev.find((p) => p.socketId === participant.socketId)) return prev;
         return [...prev, participant];
       });
-      // Initiate WebRTC connection with new participant
-      callPeer(participant.socketId);
+      // Do NOT call callPeer here, wait for the peer-ready signal!
     };
 
     const handleParticipantLeft = ({ socketId, name }) => {
@@ -93,6 +95,11 @@ export default function Room({ socket, socketRef, connected }) {
       if (screenSharer?.socketId === socketId) {
         setScreenSharer(null);
       }
+    };
+
+    const handlePeerReady = ({ socketId }) => {
+      console.log('[WebRTC] Peer is ready, initiating call to:', socketId);
+      callPeer(socketId);
     };
 
     const handleChatMessage = (msg) => {
@@ -119,6 +126,7 @@ export default function Room({ socket, socketRef, connected }) {
 
     socket.on('participant-joined', handleParticipantJoined);
     socket.on('participant-left', handleParticipantLeft);
+    socket.on('peer-ready', handlePeerReady);
     socket.on('offer', handleOffer);
     socket.on('answer', handleAnswer);
     socket.on('ice-candidate', handleIceCandidate);
@@ -127,16 +135,10 @@ export default function Room({ socket, socketRef, connected }) {
     socket.on('screen-share-started', handleScreenShareStarted);
     socket.on('screen-share-stopped', handleScreenShareStopped);
 
-    // Connect to existing participants
-    participants.forEach((p) => {
-      if (p.socketId !== socket.id) {
-        callPeer(p.socketId);
-      }
-    });
-
     return () => {
       socket.off('participant-joined', handleParticipantJoined);
       socket.off('participant-left', handleParticipantLeft);
+      socket.off('peer-ready', handlePeerReady);
       socket.off('offer', handleOffer);
       socket.off('answer', handleAnswer);
       socket.off('ice-candidate', handleIceCandidate);
@@ -145,7 +147,7 @@ export default function Room({ socket, socketRef, connected }) {
       socket.off('screen-share-started', handleScreenShareStarted);
       socket.off('screen-share-stopped', handleScreenShareStopped);
     };
-  }, [socket, joined, participants.length]);
+  }, [socket, joined]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -386,6 +388,7 @@ export default function Room({ socket, socketRef, connected }) {
         <audio
           key={peerId}
           autoPlay
+          playsInline
           ref={(el) => {
             if (el && stream) el.srcObject = stream;
           }}
