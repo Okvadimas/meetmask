@@ -13,6 +13,7 @@ export const VOICE_DEFAULTS = {
   modulation: 15,  // Light ring modulation for subtle robotic tinge
   distortion: 0,   // No distortion by default
   volume: 100,     // Default voice volume (100%)
+  denoise: true,   // AI noise reduction enabled by default
 };
 
 export const REACTIONS = ['👍', '👎', '😂', '🎉', '❤️', '🔥', '👀', '🤔'];
