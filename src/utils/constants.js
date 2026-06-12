@@ -12,6 +12,7 @@ export const VOICE_DEFAULTS = {
   pitch: 0.75,     // Slightly deeper voice by default for noticeable disguise
   modulation: 15,  // Light ring modulation for subtle robotic tinge
   distortion: 0,   // No distortion by default
+  volume: 100,     // Default voice volume (100%)
 };
 
 export const REACTIONS = ['👍', '👎', '😂', '🎉', '❤️', '🔥', '👀', '🤔'];

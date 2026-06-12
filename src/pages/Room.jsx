@@ -23,6 +23,10 @@ export default function Room({ socket, socketRef, connected }) {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isVoiceOpen, setIsVoiceOpen] = useState(false);
   const [screenSharer, setScreenSharer] = useState(null);
+  const screenSharerRef = useRef(null);
+  useEffect(() => {
+    screenSharerRef.current = screenSharer;
+  }, [screenSharer]);
   const [copied, setCopied] = useState(false);
   const [joined, setJoined] = useState(false);
 
@@ -34,6 +38,7 @@ export default function Room({ socket, socketRef, connected }) {
     setPitch,
     setModulation,
     setDistortion,
+    setVolume,
     resetDefaults,
     cleanup: cleanupVoice,
     isSelfListenEnabled,
@@ -41,7 +46,23 @@ export default function Room({ socket, socketRef, connected }) {
     selfListenVolume,
     setSelfListenVolume,
   } = useVoiceMask();
-  const { peerStreams, isScreenSharing, setLocalStream, callPeer, handleOffer, handleAnswer, handleIceCandidate, removePeer, startScreenShare, stopScreenShare, cleanup: cleanupWebRTC } = useWebRTC(socketRef);
+  const {
+    peerStreams,
+    peerScreenStreams,
+    localScreenStream,
+    isScreenSharing,
+    setLocalStream,
+    callPeer,
+    handleOffer,
+    handleAnswer,
+    handleIceCandidate,
+    removePeer,
+    removePeerScreenStream,
+    startScreenShare,
+    stopScreenShare,
+    syncPeers,
+    cleanup: cleanupWebRTC,
+  } = useWebRTC(socketRef);
 
   const processedStreamRef = useRef(null);
 
@@ -106,7 +127,7 @@ export default function Room({ socket, socketRef, connected }) {
     const handleParticipantLeft = ({ socketId }) => {
       setParticipants((prev) => prev.filter((p) => p.socketId !== socketId));
       removePeer(socketId);
-      if (screenSharer?.socketId === socketId) {
+      if (screenSharerRef.current?.socketId === socketId) {
         setScreenSharer(null);
       }
     };
@@ -115,6 +136,20 @@ export default function Room({ socket, socketRef, connected }) {
     const handleForceSync = ({ participants: serverParticipants }) => {
       console.log('[Sync] Force-sync received, participants:', serverParticipants.length);
       setParticipants(serverParticipants);
+
+      // Sync WebRTC peer connections
+      const activeSocketIds = serverParticipants.map((p) => p.socketId);
+      syncPeers(activeSocketIds);
+
+      // Sync screen sharer state
+      const sharer = serverParticipants.find((p) => p.isScreenSharing);
+      if (sharer) {
+        setScreenSharer({ socketId: sharer.socketId, name: sharer.name });
+      } else {
+        if (screenSharerRef.current && screenSharerRef.current.socketId !== socket?.id) {
+          setScreenSharer(null);
+        }
+      }
     };
 
     const handlePeerReady = ({ socketId }) => {
@@ -139,9 +174,10 @@ export default function Room({ socket, socketRef, connected }) {
     };
 
     const handleScreenShareStopped = ({ socketId }) => {
-      if (screenSharer?.socketId === socketId) {
+      if (screenSharerRef.current?.socketId === socketId) {
         setScreenSharer(null);
       }
+      removePeerScreenStream(socketId);
     };
 
     socket.on('participant-joined', handleParticipantJoined);
@@ -321,7 +357,7 @@ export default function Room({ socket, socketRef, connected }) {
           {screenSharer && (
             <div className="p-4 shrink-0">
               <ScreenShare
-                stream={screenSharer.stream}
+                stream={screenSharer.socketId === socket?.id ? localScreenStream : peerScreenStreams.get(screenSharer.socketId)}
                 sharerName={screenSharer.name}
                 isLocal={screenSharer.socketId === socket?.id}
                 onStopSharing={handleToggleScreenShare}
@@ -374,6 +410,7 @@ export default function Room({ socket, socketRef, connected }) {
             onPitchChange={setPitch}
             onModulationChange={setModulation}
             onDistortionChange={setDistortion}
+            onVolumeChange={setVolume}
             onReset={resetDefaults}
             isOpen={isVoiceOpen}
             isSelfListenEnabled={isSelfListenEnabled}

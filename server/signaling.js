@@ -150,6 +150,7 @@ export function setupSignaling(io, roomManager) {
 
     // Screen share status
     socket.on('screen-share-started', ({ roomCode }) => {
+      roomManager.setScreenSharing(roomCode, socket.id, true);
       const participants = roomManager.getParticipants(roomCode);
       const sender = participants.find((p) => p.socketId === socket.id);
       if (sender) {
@@ -157,12 +158,19 @@ export function setupSignaling(io, roomManager) {
           socketId: socket.id,
           name: sender.name,
         });
+        io.to(roomCode).emit('force-sync', {
+          participants,
+        });
       }
     });
 
     socket.on('screen-share-stopped', ({ roomCode }) => {
+      roomManager.setScreenSharing(roomCode, socket.id, false);
       socket.to(roomCode).emit('screen-share-stopped', {
         socketId: socket.id,
+      });
+      io.to(roomCode).emit('force-sync', {
+        participants: roomManager.getParticipants(roomCode),
       });
     });
 

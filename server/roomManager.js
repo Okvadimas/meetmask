@@ -77,6 +77,7 @@ class RoomManager {
       name: identity.name,
       color: identity.color,
       joinedAt: Date.now(),
+      isScreenSharing: false,
     });
 
     console.log(`[Room] ${identity.name} joined room ${code} (${room.participants.size} participants)`);
@@ -124,7 +125,24 @@ class RoomManager {
       socketId,
       name: data.name,
       color: data.color,
+      isScreenSharing: data.isScreenSharing || false,
     }));
+  }
+
+  /**
+   * Set screen sharing state of a participant
+   * @param {string} code
+   * @param {string} socketId
+   * @param {boolean} isSharing
+   */
+  setScreenSharing(code, socketId, isSharing) {
+    const room = this.rooms.get(code);
+    if (room) {
+      const participant = room.participants.get(socketId);
+      if (participant) {
+        participant.isScreenSharing = isSharing;
+      }
+    }
   }
 
   /**

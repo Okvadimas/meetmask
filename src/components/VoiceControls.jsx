@@ -5,6 +5,7 @@ export default function VoiceControls({
   onPitchChange,
   onModulationChange,
   onDistortionChange,
+  onVolumeChange,
   onReset,
   isOpen,
   isSelfListenEnabled = false,
@@ -105,6 +106,31 @@ export default function VoiceControls({
               {settings.distortion}
             </span>
           </div>
+
+          {/* Volume Booster Slider */}
+          <div className="flex items-center gap-4">
+            <label className="text-xs font-medium text-text-secondary w-24 shrink-0">
+              Volume Masker
+              <span className="block text-text-muted text-[10px]">
+                {(settings.volume ?? 100) === 0 ? 'Senyap' : (settings.volume ?? 100) < 100 ? 'Pelan' : (settings.volume ?? 100) < 150 ? 'Normal' : 'Boost Keras'}
+              </span>
+            </label>
+            <input
+              type="range"
+              min="0"
+              max="200"
+              step="5"
+              value={settings.volume ?? 100}
+              onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
+              className="flex-1 h-2 rounded-full appearance-none cursor-pointer"
+              style={{
+                background: `linear-gradient(to right, var(--color-success) 0%, var(--color-success) ${(settings.volume ?? 100) / 2}%, var(--color-bg-tertiary) ${(settings.volume ?? 100) / 2}%, var(--color-bg-tertiary) 100%)`,
+              }}
+            />
+            <span className="text-xs text-text-muted w-12 text-right font-mono">
+              {settings.volume ?? 100}%
+            </span>
+          </div>
         </div>
 
         {/* Visual indicator */}
@@ -124,7 +150,10 @@ export default function VoiceControls({
               ))}
             </div>
             <span className="text-[10px] text-text-muted">
-              {settings.pitch === VOICE_DEFAULTS.pitch && settings.modulation === VOICE_DEFAULTS.modulation && settings.distortion === VOICE_DEFAULTS.distortion
+              {settings.pitch === VOICE_DEFAULTS.pitch &&
+              settings.modulation === VOICE_DEFAULTS.modulation &&
+              settings.distortion === VOICE_DEFAULTS.distortion &&
+              (settings.volume ?? 100) === (VOICE_DEFAULTS.volume ?? 100)
                 ? 'No effects applied'
                 : 'Voice mask active'}
             </span>
