@@ -9,9 +9,9 @@ export const ICE_SERVERS = {
 };
 
 export const VOICE_DEFAULTS = {
-  pitch: 1.0,
-  modulation: 0,
-  distortion: 0,
+  pitch: 0.75,     // Slightly deeper voice by default for noticeable disguise
+  modulation: 15,  // Light ring modulation for subtle robotic tinge
+  distortion: 0,   // No distortion by default
 };
 
 export const REACTIONS = ['👍', '👎', '😂', '🎉', '❤️', '🔥', '👀', '🤔'];

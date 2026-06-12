@@ -36,6 +36,7 @@ MeetMask is a privacy-first anonymous online meeting platform built with WebRTC 
 | 😀 **Reactions** | Send floating emoji reactions (👍 👎 😂 🎉 ❤️ 🔥 👀 🤔) |
 | 🎤 **Mute/Unmute** | Toggle microphone with visual mute indicator |
 | 👥 **Speaking Indicator** | Visual glow when someone is speaking |
+| 🎧 **Self-Listen** | Hear your own voice-masked audio in real-time to preview effects |
 | 💨 **Ephemeral** | Zero data persistence — rooms self-destruct when empty |
 | ⌨️ **Keyboard Shortcuts** | Quick actions with M, C, V, S keys |
 | 🌙 **Dark Mode** | Beautiful Discord-inspired dark theme |
@@ -200,13 +201,13 @@ meetmask/
 ### 2. Audio Flow
 
 ```
-Microphone → MediaStream → Web Audio API Pipeline → Processed Stream → WebRTC → Remote Peers
-                                    │
-                            ┌───────┴───────┐
-                            │ Pitch Shift   │
-                            │ Ring Mod      │
-                            │ Distortion    │
-                            └───────────────┘
+Microphone ──> MediaStream ──> Web Audio API Pipeline ──> Processed Stream ──┬──> WebRTC ──> Remote Peers
+                                     │                                       └──> [Self-Listen Gain] ──> Speakers/Headphones (Local Output)
+                             ┌───────┴───────┐
+                             │ Pitch Shift   │
+                             │ Ring Mod      │
+                             │ Distortion    │
+                             └───────────────┘
 ```
 
 ### 3. Room Lifecycle
@@ -226,8 +227,16 @@ Voice masking uses the Web Audio API to process audio in real-time, entirely on 
 ### Audio Processing Pipeline
 
 ```
-Input → GainNode → Delay (Pitch) → RingModulator → WaveShaper (Distortion) → Output
+                                                                            ┌──> Output (to WebRTC)
+Input ──> GainNode ──> Delay (Pitch) ──> RingModulator ──> WaveShaper ──────┴──> [Self-Listen Gain] ──> Local Output (ctx.destination)
 ```
+
+### Self-Listen Preview
+
+To allow users to hear how their own voice mask sounds to other participants, MeetMask includes a **Dengarkan Diri Sendiri (Self-Listen)** option. 
+
+- **State and Volume**: Starts **disabled** by default to prevent audio loops. Includes a dynamic volume slider (0% to 100%) so users can control the self-playback volume.
+- **Feedback Loop Mitigation**: If the user is using external speakers, enabling self-listen will cause a high-pitched feedback loop (echo screech). The UI includes a prominent warning recommending the use of headphones/earphones when self-listen is active.
 
 ### Parameters
 
@@ -243,6 +252,7 @@ Input → GainNode → Delay (Pitch) → RingModulator → WaveShaper (Distortio
 - **Ring Modulation**: Oscillator node (sine wave) multiplied with voice signal
 - **Distortion**: WaveShaper node with dynamically generated transfer curves
 - **Zero Latency**: Processing happens in audio thread, no perceptible delay
+- **AudioContext Lifecycle**: Uses a single persistent context per session. Any existing context is safely closed before creating a new one to prevent memory leaks and duplicate audio streams.
 
 ---
 

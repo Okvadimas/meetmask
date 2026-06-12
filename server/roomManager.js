@@ -139,6 +139,20 @@ class RoomManager {
   }
 
   /**
+   * Find a specific participant in a room by socketId
+   * @param {string} code
+   * @param {string} socketId
+   * @returns {{ name: string, color: string } | null}
+   */
+  findParticipant(code, socketId) {
+    const room = this.rooms.get(code);
+    if (!room) return null;
+    const p = room.participants.get(socketId);
+    if (!p) return null;
+    return { name: p.name, color: p.color };
+  }
+
+  /**
    * Find which room a socket is in
    * @param {string} socketId
    * @returns {string|null} room code or null

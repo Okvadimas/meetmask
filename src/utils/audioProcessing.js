@@ -1,18 +1,28 @@
 /**
- * Generate a distortion curve for WaveShaperNode
+ * Generate a SMOOTH distortion curve for WaveShaperNode
+ * Uses soft-clipping (tanh-based) instead of harsh algebraic clipping
  * @param {number} amount - Distortion amount (0-100)
  * @returns {Float32Array}
  */
 export function createDistortionCurve(amount) {
-  const k = amount;
-  const samples = 44100;
+  if (amount === 0) {
+    // Identity curve — no distortion
+    const curve = new Float32Array(8192);
+    for (let i = 0; i < 8192; i++) {
+      curve[i] = (i * 2) / 8192 - 1;
+    }
+    return curve;
+  }
+
+  const samples = 8192;
   const curve = new Float32Array(samples);
-  const deg = Math.PI / 180;
+  // Map 0-100 to a gentle drive range
+  const drive = 1 + (amount / 100) * 8; // 1x to 9x drive
 
   for (let i = 0; i < samples; i++) {
     const x = (i * 2) / samples - 1;
-    curve[i] =
-      ((3 + k) * x * 20 * deg) / (Math.PI + k * Math.abs(x));
+    // Soft-clipping using tanh — much smoother than algebraic clipping
+    curve[i] = Math.tanh(x * drive) / Math.tanh(drive);
   }
   return curve;
 }
@@ -37,69 +47,118 @@ export function getAudioLevel(analyser) {
 }
 
 /**
- * Create a pitch shifter using detune on an oscillator-based approach
- * This uses a simple granular method via buffer manipulation
+ * AudioWorklet processor code for real-time granular pitch shifting.
+ *
+ * Technique: Splits audio into small overlapping grains, plays them back
+ * at a different rate, and crossfades between two grain readers to avoid
+ * clicks and gaps. This is the standard technique used in professional
+ * pitch shifters (Eventide, Soundtoys, etc.)
+ *
+ * @returns {string} - AudioWorklet processor code as a string (to be used with Blob URL)
  */
-export class PitchShifter {
-  constructor(audioContext) {
-    this.ctx = audioContext;
-    this.input = this.ctx.createGain();
-    this.output = this.ctx.createGain();
+export function getGranularPitchShifterCode() {
+  return `
+class GranularPitchProcessor extends AudioWorkletProcessor {
+  constructor(options) {
+    super();
+    // Grain size in samples (default ~50ms at 48kHz = 2400 samples)
+    this.grainSize = Math.round(sampleRate * 0.05);
+    this.buffer = new Float32Array(this.grainSize * 4);
+    this.bufferLength = this.buffer.length;
+    this.writePos = 0;
+    this.readPos1 = 0;
+    this.readPos2 = this.grainSize; // offset by half a grain
     this.pitchRatio = 1.0;
+    this.crossfadePos = 0;
 
-    // Use a delay-based pitch shifting approach
-    this.delayNode1 = this.ctx.createDelay(1.0);
-    this.delayNode2 = this.ctx.createDelay(1.0);
-    this.gain1 = this.ctx.createGain();
-    this.gain2 = this.ctx.createGain();
-    this.merger = this.ctx.createChannelMerger(2);
-
-    // Connect the cross-fade delay network
-    this.input.connect(this.delayNode1);
-    this.input.connect(this.delayNode2);
-    this.delayNode1.connect(this.gain1);
-    this.delayNode2.connect(this.gain2);
-    this.gain1.connect(this.output);
-    this.gain2.connect(this.output);
-
-    this._grainSize = 0.1; // seconds
-    this._running = false;
+    this.port.onmessage = (e) => {
+      if (e.data.pitchRatio !== undefined) {
+        this.pitchRatio = e.data.pitchRatio;
+      }
+    };
   }
 
-  set pitch(value) {
-    this.pitchRatio = Math.max(0.5, Math.min(2.0, value));
-    this._updateDelay();
-  }
+  process(inputs, outputs) {
+    const input = inputs[0];
+    const output = outputs[0];
 
-  _updateDelay() {
-    if (this.pitchRatio === 1.0) {
-      this.delayNode1.delayTime.value = 0;
-      this.delayNode2.delayTime.value = 0;
-      this.gain1.gain.value = 1;
-      this.gain2.gain.value = 0;
-      return;
+    if (!input || !input[0] || !output || !output[0]) return true;
+
+    const inputChannel = input[0];
+    const outputChannel = output[0];
+    const blockSize = inputChannel.length;
+
+    for (let i = 0; i < blockSize; i++) {
+      // Write input into circular buffer
+      this.buffer[this.writePos] = inputChannel[i];
+      this.writePos = (this.writePos + 1) % this.bufferLength;
+
+      // Read from two positions at the pitch-shifted rate
+      const idx1 = Math.floor(this.readPos1) % this.bufferLength;
+      const idx2 = Math.floor(this.readPos2) % this.bufferLength;
+
+      // Fractional interpolation for smoother output
+      const frac1 = this.readPos1 - Math.floor(this.readPos1);
+      const next1 = (idx1 + 1) % this.bufferLength;
+      const sample1 = this.buffer[idx1] * (1 - frac1) + this.buffer[next1] * frac1;
+
+      const frac2 = this.readPos2 - Math.floor(this.readPos2);
+      const next2 = (idx2 + 1) % this.bufferLength;
+      const sample2 = this.buffer[idx2] * (1 - frac2) + this.buffer[next2] * frac2;
+
+      // Crossfade between the two grain readers using a smooth Hann window
+      const fadePhase = (this.crossfadePos / this.grainSize) * Math.PI;
+      const fade1 = Math.cos(fadePhase) * 0.5 + 0.5;
+      const fade2 = 1.0 - fade1;
+
+      outputChannel[i] = sample1 * fade1 + sample2 * fade2;
+
+      // Advance read positions by the pitch ratio
+      this.readPos1 = (this.readPos1 + this.pitchRatio) % this.bufferLength;
+      this.readPos2 = (this.readPos2 + this.pitchRatio) % this.bufferLength;
+
+      // Advance crossfade and reset grain positions when a grain completes
+      this.crossfadePos++;
+      if (this.crossfadePos >= this.grainSize) {
+        this.crossfadePos = 0;
+        // Resync the fading-out reader to near the write position
+        this.readPos1 = (this.writePos - this.grainSize + this.bufferLength) % this.bufferLength;
+        // Swap: on next grain, the other reader resyncs
+        const temp = this.readPos1;
+        this.readPos1 = this.readPos2;
+        this.readPos2 = temp;
+      }
     }
 
-    const now = this.ctx.currentTime;
-    const rate = 1 - this.pitchRatio;
-    const grainSize = this._grainSize;
+    return true;
+  }
+}
 
-    // Cross-fade between two delay taps for smooth pitch shifting
-    this.gain1.gain.value = 0.5;
-    this.gain2.gain.value = 0.5;
+registerProcessor('granular-pitch-processor', GranularPitchProcessor);
+`;
+}
 
-    // Modulate delay times
-    const delayAmount = Math.abs(rate) * grainSize;
-    this.delayNode1.delayTime.setValueAtTime(delayAmount * 0.5, now);
-    this.delayNode2.delayTime.setValueAtTime(delayAmount, now);
+/**
+ * Create and register the granular pitch shifter AudioWorklet
+ * @param {AudioContext} ctx
+ * @returns {Promise<AudioWorkletNode>}
+ */
+export async function createGranularPitchShifter(ctx) {
+  const code = getGranularPitchShifterCode();
+  const blob = new Blob([code], { type: 'application/javascript' });
+  const url = URL.createObjectURL(blob);
+
+  try {
+    await ctx.audioWorklet.addModule(url);
+  } finally {
+    URL.revokeObjectURL(url);
   }
 
-  connect(destination) {
-    this.output.connect(destination);
-    return destination;
-  }
+  const node = new AudioWorkletNode(ctx, 'granular-pitch-processor', {
+    numberOfInputs: 1,
+    numberOfOutputs: 1,
+    outputChannelCount: [1],
+  });
 
-  disconnect() {
-    this.output.disconnect();
-  }
+  return node;
 }
