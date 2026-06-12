@@ -39,6 +39,7 @@ export default function Room({ socket, socketRef, connected }) {
     setModulation,
     setDistortion,
     setVolume,
+    setDenoise,
     resetDefaults,
     cleanup: cleanupVoice,
     isSelfListenEnabled,
@@ -252,6 +253,10 @@ export default function Room({ socket, socketRef, connected }) {
     }
   };
 
+  const handleToggleDenoise = () => {
+    setDenoise(!(settings.denoise ?? true));
+  };
+
   const handleSendMessage = (message) => {
     socket?.emit('chat-message', { roomCode: code, message });
   };
@@ -417,6 +422,7 @@ export default function Room({ socket, socketRef, connected }) {
             onModulationChange={setModulation}
             onDistortionChange={setDistortion}
             onVolumeChange={setVolume}
+            onDenoiseToggle={setDenoise}
             onReset={resetDefaults}
             isOpen={isVoiceOpen}
             isSelfListenEnabled={isSelfListenEnabled}
@@ -437,6 +443,8 @@ export default function Room({ socket, socketRef, connected }) {
             isVoiceOpen={isVoiceOpen}
             onReaction={handleReaction}
             onLeave={handleLeave}
+            isDenoiseActive={settings.denoise ?? true}
+            onToggleDenoise={handleToggleDenoise}
           />
         </div>
 

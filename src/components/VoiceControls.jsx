@@ -6,6 +6,7 @@ export default function VoiceControls({
   onModulationChange,
   onDistortionChange,
   onVolumeChange,
+  onDenoiseToggle,
   onReset,
   isOpen,
   isSelfListenEnabled = false,
@@ -153,11 +154,29 @@ export default function VoiceControls({
               {settings.pitch === VOICE_DEFAULTS.pitch &&
               settings.modulation === VOICE_DEFAULTS.modulation &&
               settings.distortion === VOICE_DEFAULTS.distortion &&
-              (settings.volume ?? 100) === (VOICE_DEFAULTS.volume ?? 100)
+              (settings.volume ?? 100) === (VOICE_DEFAULTS.volume ?? 100) &&
+              (settings.denoise ?? true) === (VOICE_DEFAULTS.denoise ?? true)
                 ? 'No effects applied'
                 : 'Voice mask active'}
             </span>
           </div>
+        </div>
+
+        {/* RNNoise AI Denoise Toggle */}
+        <div className="flex items-center justify-between border-t border-border/40 pt-4 mt-3">
+          <div className="flex flex-col">
+            <span className="text-xs font-semibold text-text-primary">Peredam Kebisingan (RNNoise AI)</span>
+            <span className="text-[10px] text-text-muted">Menggunakan AI untuk mendeteksi dan menghapus noise latar belakang</span>
+          </div>
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              checked={settings.denoise ?? true}
+              onChange={(e) => onDenoiseToggle(e.target.checked)}
+              className="sr-only peer"
+            />
+            <div className="w-9 h-5 bg-bg-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-accent"></div>
+          </label>
         </div>
 
         {/* Divider */}

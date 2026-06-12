@@ -12,6 +12,8 @@ export default function ControlBar({
   isVoiceOpen,
   onReaction,
   onLeave,
+  isDenoiseActive = true,
+  onToggleDenoise,
 }) {
   const [showReactions, setShowReactions] = useState(false);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
@@ -47,6 +49,25 @@ export default function ControlBar({
               <line x1="8" y1="23" x2="16" y2="23" />
             </svg>
           )}
+        </button>
+
+        {/* Noise Cancellation (RNNoise AI) */}
+        <button
+          onClick={onToggleDenoise}
+          data-tooltip={isDenoiseActive ? 'Denoise Active (AI)' : 'Denoise Inactive (AI)'}
+          className={`
+            w-12 h-12 rounded-full flex items-center justify-center transition-all duration-200
+            ${isDenoiseActive
+              ? 'bg-success hover:bg-success/80 text-white'
+              : 'bg-bg-tertiary hover:bg-border-light text-text-primary'
+            }
+          `}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            {/* Wave lines representing audio/noise */}
+            <path d="M4 10v4M8 6v12M12 2v20M16 6v12M20 10v4" />
+            {!isDenoiseActive && <line x1="2" y1="2" x2="22" y2="22" stroke="currentColor" strokeWidth="2" />}
+          </svg>
         </button>
 
         {/* Screen Share */}

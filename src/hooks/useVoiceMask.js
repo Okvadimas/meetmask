@@ -1,6 +1,10 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { createDistortionCurve, createGranularPitchShifter } from '../utils/audioProcessing';
 import { VOICE_DEFAULTS } from '../utils/constants';
+import { RnnoiseWorkletNode, loadRnnoise } from '@sapphi-red/web-noise-suppressor';
+import rnnoiseWasmUrl from '../../node_modules/@sapphi-red/web-noise-suppressor/dist/rnnoise.wasm?url';
+import rnnoiseSimdWasmUrl from '../../node_modules/@sapphi-red/web-noise-suppressor/dist/rnnoise_simd.wasm?url';
+import rnnoiseProcessorUrl from '../../node_modules/@sapphi-red/web-noise-suppressor/dist/rnnoise/workletProcessor.js?url';
 
 export function useVoiceMask() {
   const [settings, setSettings] = useState({ ...VOICE_DEFAULTS });
@@ -24,8 +28,9 @@ export function useVoiceMask() {
   /**
    * High-quality voice masking pipeline:
    *
-   * Input → Highpass → Lowpass → GranularPitchShifter (with DSP Noise Gate) → RingModulator → SoftDistortion → OutputGain → Limiter → Output
+   * Input → RNNoise (Active / Bypass) → Highpass → Lowpass → GranularPitchShifter (with DSP Noise Gate) → RingModulator → SoftDistortion → OutputGain → Limiter → Output
    *
+   * - RNNoise:    Real-time AI noise suppressor.
    * - Highpass:   Removes low-frequency rumble (< 100Hz)
    * - Lowpass:    Removes harsh high frequencies (> 8kHz) for smoothness
    * - Pitch:      Real granular pitch shifting via AudioWorklet (smooth, artifact-free)
@@ -50,6 +55,32 @@ export function useVoiceMask() {
     audioContextRef.current = ctx;
 
     const source = ctx.createMediaStreamSource(inputStream);
+
+    // === RNNoise Node & Bypass/Active gains ===
+    let rnnoiseNode;
+    const rnnoiseBypass = ctx.createGain();
+    const rnnoiseActive = ctx.createGain();
+
+    // Default connections
+    source.connect(rnnoiseBypass);
+
+    try {
+      await ctx.audioWorklet.addModule(rnnoiseProcessorUrl);
+      const wasmBinary = await loadRnnoise({
+        url: rnnoiseWasmUrl,
+        simdUrl: rnnoiseSimdWasmUrl,
+      });
+      rnnoiseNode = new RnnoiseWorkletNode(ctx, {
+        maxChannels: 1,
+        wasmBinary,
+      });
+      source.connect(rnnoiseNode);
+      rnnoiseNode.connect(rnnoiseActive);
+    } catch (err) {
+      console.warn('[VoiceMask] Failed to initialize RNNoise:', err);
+      // Fallback: connect source to active path directly so audio isn't broken
+      source.connect(rnnoiseActive);
+    }
 
     // === 1. Highpass filter — remove rumble below 100Hz ===
     const highpass = ctx.createBiquadFilter();
@@ -132,8 +163,9 @@ export function useVoiceMask() {
     selfListenGain.connect(ctx.destination);
 
     // === Connect the full chain ===
-    // Source → Highpass → Lowpass → PitchShifter
-    source.connect(highpass);
+    // Denoise paths → Highpass → Lowpass → PitchShifter
+    rnnoiseBypass.connect(highpass);
+    rnnoiseActive.connect(highpass);
     highpass.connect(lowpass);
     lowpass.connect(pitchShifter);
 
@@ -158,6 +190,9 @@ export function useVoiceMask() {
     // Store references for parameter updates
     nodesRef.current = {
       source,
+      rnnoiseNode,
+      rnnoiseActive,
+      rnnoiseBypass,
       highpass,
       lowpass,
       pitchShifter,
@@ -186,7 +221,16 @@ export function useVoiceMask() {
    * Apply voice mask settings to audio nodes in real-time
    */
   const applySettings = (s, ctx, nodes) => {
-    if (!ctx || !nodes.pitchShifter) return;
+    if (!ctx) return;
+
+    // === RNNoise Denoise bypass/active crossfade ===
+    const isDenoise = s.denoise ?? true;
+    if (nodes.rnnoiseActive && nodes.rnnoiseBypass) {
+      nodes.rnnoiseActive.gain.setTargetAtTime(isDenoise ? 1.0 : 0.0, ctx.currentTime, 0.02);
+      nodes.rnnoiseBypass.gain.setTargetAtTime(isDenoise ? 0.0 : 1.0, ctx.currentTime, 0.02);
+    }
+
+    if (!nodes.pitchShifter) return;
 
     // === Pitch: send new ratio to the AudioWorklet ===
     if (nodes.pitchShifter.port && typeof nodes.pitchShifter.port.postMessage === 'function') {
@@ -259,6 +303,14 @@ export function useVoiceMask() {
     }
   }, [settings]);
 
+  const setDenoise = useCallback((value) => {
+    const newSettings = { ...settings, denoise: value };
+    setSettings(newSettings);
+    if (audioContextRef.current && (nodesRef.current.rnnoiseActive || nodesRef.current.rnnoiseBypass)) {
+      applySettings(newSettings, audioContextRef.current, nodesRef.current);
+    }
+  }, [settings]);
+
   const resetDefaults = useCallback(() => {
     const defaults = { ...VOICE_DEFAULTS };
     setSettings(defaults);
@@ -303,6 +355,7 @@ export function useVoiceMask() {
     setModulation,
     setDistortion,
     setVolume,
+    setDenoise,
     resetDefaults,
     cleanup,
     isSelfListenEnabled,
