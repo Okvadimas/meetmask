@@ -75,6 +75,12 @@ export default function Room({ socket, socketRef, connected }) {
           setIdentity(response.identity);
           setParticipants(response.participants);
           setJoined(true);
+          
+          // Instantly check if someone is already screen sharing in the room
+          const sharer = response.participants.find((p) => p.isScreenSharing);
+          if (sharer) {
+            setScreenSharer({ socketId: sharer.socketId, name: sharer.name });
+          }
         } else {
           navigate('/', { state: { error: response.error } });
         }
@@ -114,7 +120,7 @@ export default function Room({ socket, socketRef, connected }) {
 
   // Set up socket event listeners
   useEffect(() => {
-    if (!socket || !joined) return;
+    if (!socket) return;
 
     const handleParticipantJoined = (participant) => {
       setParticipants((prev) => {
@@ -205,7 +211,7 @@ export default function Room({ socket, socketRef, connected }) {
       socket.off('screen-share-started', handleScreenShareStarted);
       socket.off('screen-share-stopped', handleScreenShareStopped);
     };
-  }, [socket, joined]);
+  }, [socket]);
 
   // Keyboard shortcuts
   useEffect(() => {
