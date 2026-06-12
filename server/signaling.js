@@ -35,6 +35,20 @@ export function setupSignaling(io, roomManager) {
         return;
       }
 
+      // If this socket is already in the room (e.g., after create-room on same page load),
+      // return existing identity without re-adding or broadcasting
+      const existingParticipant = roomManager.findParticipant(code, socket.id);
+      if (existingParticipant) {
+        socket.join(code); // Ensure Socket.IO room membership
+        callback({
+          success: true,
+          roomCode: code,
+          identity: existingParticipant,
+          participants: roomManager.getParticipants(code),
+        });
+        return;
+      }
+
       if (roomManager.isRoomFull(code)) {
         callback({ success: false, error: 'Room is full (max 10 participants)' });
         return;
@@ -63,6 +77,11 @@ export function setupSignaling(io, roomManager) {
         roomCode: code,
         identity,
         participants: result.participants,
+      });
+
+      // Force-sync all clients in the room with the authoritative participant list
+      io.to(code).emit('force-sync', {
+        participants: roomManager.getParticipants(code),
       });
     });
 
@@ -171,5 +190,12 @@ function handleLeave(socket, roomManager, io, roomCode) {
       socketId: socket.id,
       name: result.participant?.name,
     });
+
+    // Force-sync remaining clients with authoritative list
+    if (!result.roomDestroyed) {
+      io.to(roomCode).emit('force-sync', {
+        participants: roomManager.getParticipants(roomCode),
+      });
+    }
   }
 }

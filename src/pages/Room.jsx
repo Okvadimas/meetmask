@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useParams, useLocation, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import ParticipantCard from '../components/ParticipantCard';
 import ControlBar from '../components/ControlBar';
 import VoiceControls from '../components/VoiceControls';
@@ -13,28 +13,40 @@ import { KEYBOARD_SHORTCUTS } from '../utils/constants';
 
 export default function Room({ socket, socketRef, connected }) {
   const { code } = useParams();
-  const location = useLocation();
   const navigate = useNavigate();
 
-  // Identity from navigation state
-  const [identity, setIdentity] = useState(location.state?.identity || null);
-  const [participants, setParticipants] = useState(location.state?.participants || []);
+  // State — never trust location.state for join status (it persists across refreshes)
+  const [identity, setIdentity] = useState(null);
+  const [participants, setParticipants] = useState([]);
   const [messages, setMessages] = useState([]);
   const [reactions, setReactions] = useState([]);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isVoiceOpen, setIsVoiceOpen] = useState(false);
   const [screenSharer, setScreenSharer] = useState(null);
   const [copied, setCopied] = useState(false);
-  const [joined, setJoined] = useState(!!location.state?.identity);
+  const [joined, setJoined] = useState(false);
 
   // Hooks
   const { localStream, isMuted, audioLevel, error: mediaError, startStream, toggleMute, stopStream } = useMediaStream();
-  const { settings, processStream, setPitch, setModulation, setDistortion, resetDefaults, cleanup: cleanupVoice } = useVoiceMask();
+  const {
+    settings,
+    processStream,
+    setPitch,
+    setModulation,
+    setDistortion,
+    resetDefaults,
+    cleanup: cleanupVoice,
+    isSelfListenEnabled,
+    setSelfListenEnabled,
+    selfListenVolume,
+    setSelfListenVolume,
+  } = useVoiceMask();
   const { peerStreams, isScreenSharing, setLocalStream, callPeer, handleOffer, handleAnswer, handleIceCandidate, removePeer, startScreenShare, stopScreenShare, cleanup: cleanupWebRTC } = useWebRTC(socketRef);
 
   const processedStreamRef = useRef(null);
 
-  // If user navigated directly to /room/:code without joining, redirect or join
+  // Always join/rejoin the room via socket when connected
+  // Server handles idempotency: if socket is already in room, returns existing identity
   useEffect(() => {
     if (!joined && socket && connected) {
       socket.emit('join-room', code, (response) => {
@@ -52,10 +64,10 @@ export default function Room({ socket, socketRef, connected }) {
   // Initialize audio
   useEffect(() => {
     if (joined) {
-      startStream().then((stream) => {
+      startStream().then(async (stream) => {
         if (stream) {
-          // Process through voice mask
-          const processed = processStream(stream);
+          // Process through voice mask (async — loads AudioWorklet)
+          const processed = await processStream(stream);
           processedStreamRef.current = processed || stream;
           setLocalStream(processedStreamRef.current);
           
@@ -66,16 +78,18 @@ export default function Room({ socket, socketRef, connected }) {
     }
   }, [joined]);
 
-  // Reprocess when voice settings change
+
+  // Immediately notify server on page refresh/close so socket is cleaned up fast
   useEffect(() => {
-    if (localStream && joined) {
-      const processed = processStream(localStream);
-      if (processed) {
-        processedStreamRef.current = processed;
-        setLocalStream(processed);
-      }
-    }
-  }, [settings.pitch, settings.modulation, settings.distortion]);
+    if (!socket || !joined) return;
+
+    const handleBeforeUnload = () => {
+      socket.emit('leave-room', code);
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [socket, joined, code]);
 
   // Set up socket event listeners
   useEffect(() => {
@@ -89,12 +103,18 @@ export default function Room({ socket, socketRef, connected }) {
       // Do NOT call callPeer here, wait for the peer-ready signal!
     };
 
-    const handleParticipantLeft = ({ socketId, name }) => {
+    const handleParticipantLeft = ({ socketId }) => {
       setParticipants((prev) => prev.filter((p) => p.socketId !== socketId));
       removePeer(socketId);
       if (screenSharer?.socketId === socketId) {
         setScreenSharer(null);
       }
+    };
+
+    // Server sends the authoritative participant list after any join/leave
+    const handleForceSync = ({ participants: serverParticipants }) => {
+      console.log('[Sync] Force-sync received, participants:', serverParticipants.length);
+      setParticipants(serverParticipants);
     };
 
     const handlePeerReady = ({ socketId }) => {
@@ -126,6 +146,7 @@ export default function Room({ socket, socketRef, connected }) {
 
     socket.on('participant-joined', handleParticipantJoined);
     socket.on('participant-left', handleParticipantLeft);
+    socket.on('force-sync', handleForceSync);
     socket.on('peer-ready', handlePeerReady);
     socket.on('offer', handleOffer);
     socket.on('answer', handleAnswer);
@@ -138,6 +159,7 @@ export default function Room({ socket, socketRef, connected }) {
     return () => {
       socket.off('participant-joined', handleParticipantJoined);
       socket.off('participant-left', handleParticipantLeft);
+      socket.off('force-sync', handleForceSync);
       socket.off('peer-ready', handlePeerReady);
       socket.off('offer', handleOffer);
       socket.off('answer', handleAnswer);
@@ -354,6 +376,10 @@ export default function Room({ socket, socketRef, connected }) {
             onDistortionChange={setDistortion}
             onReset={resetDefaults}
             isOpen={isVoiceOpen}
+            isSelfListenEnabled={isSelfListenEnabled}
+            onSelfListenToggle={setSelfListenEnabled}
+            selfListenVolume={selfListenVolume}
+            onSelfListenVolumeChange={setSelfListenVolume}
           />
 
           {/* Control bar */}

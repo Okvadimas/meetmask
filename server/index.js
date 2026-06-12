@@ -18,6 +18,8 @@ const io = new Server(httpServer, {
     origin: '*',
     methods: ['GET', 'POST'],
   },
+  pingInterval: 5000,
+  pingTimeout: 10000,
 });
 
 app.use(cors());
