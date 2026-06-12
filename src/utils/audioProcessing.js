@@ -71,9 +71,18 @@ class GranularPitchProcessor extends AudioWorkletProcessor {
     this.pitchRatio = 1.0;
     this.crossfadePos = 0;
 
+    // DSP Noise Gate state variables
+    this.envelope = 0;
+    this.gateThreshold = 0.015; // default threshold (approx -36dB)
+    this.attackCoef = Math.exp(-1 / (sampleRate * 0.005)); // 5ms attack time
+    this.releaseCoef = Math.exp(-1 / (sampleRate * 0.15)); // 150ms release time
+
     this.port.onmessage = (e) => {
       if (e.data.pitchRatio !== undefined) {
         this.pitchRatio = e.data.pitchRatio;
+      }
+      if (e.data.gateThreshold !== undefined) {
+        this.gateThreshold = e.data.gateThreshold;
       }
     };
   }
@@ -89,8 +98,27 @@ class GranularPitchProcessor extends AudioWorkletProcessor {
     const blockSize = inputChannel.length;
 
     for (let i = 0; i < blockSize; i++) {
-      // Write input into circular buffer
-      this.buffer[this.writePos] = inputChannel[i];
+      const inputSample = inputChannel[i];
+
+      // Envelope follower on raw input amplitude
+      const inputAbs = Math.abs(inputSample);
+      if (inputAbs > this.envelope) {
+        this.envelope = inputAbs * (1 - this.attackCoef) + this.envelope * this.attackCoef;
+      } else {
+        this.envelope = inputAbs * (1 - this.releaseCoef) + this.envelope * this.releaseCoef;
+      }
+
+      // Calculate gate gain (0.0 to 1.0)
+      let gateGain = 1.0;
+      if (this.envelope < this.gateThreshold) {
+        // Smooth quadratic attenuation curve for natural gating (no harsh clicks)
+        const ratio = this.envelope / this.gateThreshold;
+        gateGain = ratio * ratio;
+        if (gateGain < 0.01) gateGain = 0.0;
+      }
+
+      // Write raw input into circular buffer
+      this.buffer[this.writePos] = inputSample;
       this.writePos = (this.writePos + 1) % this.bufferLength;
 
       // Read from two positions at the pitch-shifted rate
@@ -111,7 +139,8 @@ class GranularPitchProcessor extends AudioWorkletProcessor {
       const fade1 = Math.cos(fadePhase) * 0.5 + 0.5;
       const fade2 = 1.0 - fade1;
 
-      outputChannel[i] = sample1 * fade1 + sample2 * fade2;
+      // Combine pitch-shifted grains and apply the noise gate gain
+      outputChannel[i] = (sample1 * fade1 + sample2 * fade2) * gateGain;
 
       // Advance read positions by the pitch ratio
       this.readPos1 = (this.readPos1 + this.pitchRatio) % this.bufferLength;

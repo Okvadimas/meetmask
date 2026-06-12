@@ -24,14 +24,15 @@ export function useVoiceMask() {
   /**
    * High-quality voice masking pipeline:
    *
-   * Input → NoiseGate → Highpass → Lowpass → GranularPitchShifter → RingModulator → SoftDistortion → Output
+   * Input → Highpass → Lowpass → GranularPitchShifter (with DSP Noise Gate) → RingModulator → SoftDistortion → OutputGain → Limiter → Output
    *
-   * - NoiseGate:  Compressor with high threshold acts as gate to cut background noise
    * - Highpass:   Removes low-frequency rumble (< 100Hz)
    * - Lowpass:    Removes harsh high frequencies (> 8kHz) for smoothness
    * - Pitch:      Real granular pitch shifting via AudioWorklet (smooth, artifact-free)
+   *               Includes a custom DSP Noise Gate inside the processor.
    * - RingMod:    Dry/wet blend ring modulator for alien/robotic tones
    * - Distortion: Soft tanh-based waveshaper for warm overdrive
+   * - OutputGain: Dedicated volume booster (0% - 200%)
    */
   const processStream = useCallback(async (inputStream) => {
     if (!inputStream) return null;
@@ -50,40 +51,32 @@ export function useVoiceMask() {
 
     const source = ctx.createMediaStreamSource(inputStream);
 
-    // === 1. Noise Gate (using Compressor with aggressive settings) ===
-    const noiseGate = ctx.createDynamicsCompressor();
-    noiseGate.threshold.setValueAtTime(-45, ctx.currentTime);  // Gate opens at -45dB
-    noiseGate.knee.setValueAtTime(5, ctx.currentTime);
-    noiseGate.ratio.setValueAtTime(12, ctx.currentTime);
-    noiseGate.attack.setValueAtTime(0.003, ctx.currentTime);   // Fast attack
-    noiseGate.release.setValueAtTime(0.1, ctx.currentTime);    // Smooth release
-
-    // === 2. Highpass filter — remove rumble below 100Hz ===
+    // === 1. Highpass filter — remove rumble below 100Hz ===
     const highpass = ctx.createBiquadFilter();
     highpass.type = 'highpass';
     highpass.frequency.setValueAtTime(100, ctx.currentTime);
     highpass.Q.setValueAtTime(0.7, ctx.currentTime);
 
-    // === 3. Lowpass filter — remove harshness above 8kHz ===
+    // === 2. Lowpass filter — remove harshness above 8kHz ===
     const lowpass = ctx.createBiquadFilter();
     lowpass.type = 'lowpass';
     lowpass.frequency.setValueAtTime(8000, ctx.currentTime);
     lowpass.Q.setValueAtTime(0.7, ctx.currentTime);
 
-    // === 4. Granular Pitch Shifter (AudioWorklet) ===
+    // === 3. Granular Pitch Shifter (AudioWorklet) with integrated Noise Gate ===
     let pitchShifter;
     try {
       pitchShifter = await createGranularPitchShifter(ctx);
       // Send initial pitch
       pitchShifter.port.postMessage({ pitchRatio: settings.pitch });
     } catch (err) {
-      console.warn('[VoiceMask] AudioWorklet not supported, falling back to delay-based pitch:', err);
+      console.warn('[VoiceMask] AudioWorklet not supported, falling back to simple gain:', err);
       // Fallback: simple gain passthrough if AudioWorklet fails
       pitchShifter = ctx.createGain();
       pitchShifter.gain.value = 1.0;
     }
 
-    // === 5. Ring Modulator (dry/wet blend) ===
+    // === 4. Ring Modulator (dry/wet blend) ===
     // Split into dry and wet paths, mix via gains
     const dryGain = ctx.createGain();
     const wetGain = ctx.createGain();
@@ -103,23 +96,23 @@ export function useVoiceMask() {
     const ringMixer = ctx.createGain();
     ringMixer.gain.value = 1.0;
 
-    // === 6. Soft Distortion (tanh-based WaveShaper) ===
+    // === 5. Soft Distortion (tanh-based WaveShaper) ===
     const distortion = ctx.createWaveShaper();
     distortion.curve = createDistortionCurve(0);
     distortion.oversample = '4x';
 
-    // === 7. Post-EQ: gentle presence boost around 2-4kHz for clarity ===
+    // === 6. Post-EQ: gentle presence boost around 2-4kHz for clarity ===
     const presenceEQ = ctx.createBiquadFilter();
     presenceEQ.type = 'peaking';
     presenceEQ.frequency.setValueAtTime(3000, ctx.currentTime);
     presenceEQ.gain.setValueAtTime(2, ctx.currentTime); // +2dB
     presenceEQ.Q.setValueAtTime(1.0, ctx.currentTime);
 
-    // === 8. Output gain ===
+    // === 7. Output gain (Volume Booster) ===
     const outputGain = ctx.createGain();
-    outputGain.gain.value = 1.0;
+    outputGain.gain.value = (settings.volume !== undefined ? settings.volume : 100) / 100;
 
-    // === 9. Compressor for final output smoothing ===
+    // === 8. Compressor for final output smoothing ===
     const limiter = ctx.createDynamicsCompressor();
     limiter.threshold.setValueAtTime(-6, ctx.currentTime);
     limiter.knee.setValueAtTime(6, ctx.currentTime);
@@ -139,9 +132,8 @@ export function useVoiceMask() {
     selfListenGain.connect(ctx.destination);
 
     // === Connect the full chain ===
-    // Source → NoiseGate → Highpass → Lowpass → PitchShifter
-    source.connect(noiseGate);
-    noiseGate.connect(highpass);
+    // Source → Highpass → Lowpass → PitchShifter
+    source.connect(highpass);
     highpass.connect(lowpass);
     lowpass.connect(pitchShifter);
 
@@ -153,7 +145,7 @@ export function useVoiceMask() {
     ringModGain.connect(wetGain);
     wetGain.connect(ringMixer);
 
-    // Mixer → Distortion → Presence EQ → Limiter → Output
+    // Mixer → Distortion → Presence EQ → OutputGain → Limiter → Output
     ringMixer.connect(distortion);
     distortion.connect(presenceEQ);
     presenceEQ.connect(outputGain);
@@ -166,7 +158,6 @@ export function useVoiceMask() {
     // Store references for parameter updates
     nodesRef.current = {
       source,
-      noiseGate,
       highpass,
       lowpass,
       pitchShifter,
@@ -228,6 +219,12 @@ export function useVoiceMask() {
     } else {
       nodes.lowpass.frequency.setTargetAtTime(8000, ctx.currentTime, 0.05);
     }
+
+    // === Volume Booster ===
+    const volValue = (s.volume !== undefined ? s.volume : 100) / 100; // Map 0-200% to 0.0-2.0 multiplier
+    if (nodes.outputGain) {
+      nodes.outputGain.gain.setTargetAtTime(volValue, ctx.currentTime, 0.02);
+    }
   };
 
   const setPitch = useCallback((value) => {
@@ -250,6 +247,14 @@ export function useVoiceMask() {
     const newSettings = { ...settings, distortion: value };
     setSettings(newSettings);
     if (audioContextRef.current && nodesRef.current.distortion) {
+      applySettings(newSettings, audioContextRef.current, nodesRef.current);
+    }
+  }, [settings]);
+
+  const setVolume = useCallback((value) => {
+    const newSettings = { ...settings, volume: value };
+    setSettings(newSettings);
+    if (audioContextRef.current && nodesRef.current.outputGain) {
       applySettings(newSettings, audioContextRef.current, nodesRef.current);
     }
   }, [settings]);
@@ -297,6 +302,7 @@ export function useVoiceMask() {
     setPitch,
     setModulation,
     setDistortion,
+    setVolume,
     resetDefaults,
     cleanup,
     isSelfListenEnabled,
